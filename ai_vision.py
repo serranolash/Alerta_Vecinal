@@ -18,6 +18,27 @@ PLATE_API_URL = os.getenv(
 RiskLevel = Literal["alto", "medio", "bajo"]
 
 
+def _debug_env():
+    """
+    Imprime en logs qué ve el backend respecto a las variables de IA.
+    NO imprime los valores completos de las keys, solo si existen.
+    """
+    print(
+        "[AI_DEBUG] ROBOFLOW_API_KEY presente:",
+        ROBOFLOW_API_KEY is not None and ROBOFLOW_API_KEY != "",
+    )
+    print("[AI_DEBUG] ROBOFLOW_MODEL_ID:", repr(ROBOFLOW_MODEL_ID))
+    print(
+        "[AI_DEBUG] PLATERECOGNIZER_API_TOKEN presente:",
+        PLATE_API_TOKEN is not None and PLATE_API_TOKEN != "",
+    )
+    print("[AI_DEBUG] PLATERECOGNIZER_API_URL:", repr(PLATE_API_URL))
+
+
+# Llamamos al debug una sola vez al importar el módulo
+_debug_env()
+
+
 # ---------------- Roboflow: detección de armas ----------------
 
 def call_roboflow_hosted(image_bytes: bytes) -> Dict:
@@ -25,7 +46,15 @@ def call_roboflow_hosted(image_bytes: bytes) -> Dict:
     Llama al Hosted Model de Roboflow usando BYTES (como los envía create_report).
     """
     if not ROBOFLOW_API_KEY or not ROBOFLOW_MODEL_ID:
-        raise RuntimeError("Faltan ROBOFLOW_API_KEY o ROBOFLOW_MODEL_ID en .env")
+        # Log más explícito para saber qué llegó exactamente
+        print(
+            "[AI_ERROR] Variables de entorno IA incompletas. "
+            f"ROBOFLOW_API_KEY={repr(ROBOFLOW_API_KEY)}, "
+            f"ROBOFLOW_MODEL_ID={repr(ROBOFLOW_MODEL_ID)}"
+        )
+        raise RuntimeError(
+            "Faltan ROBOFLOW_API_KEY o ROBOFLOW_MODEL_ID en variables de entorno."
+        )
 
     params = {
         "api_key": ROBOFLOW_API_KEY,
