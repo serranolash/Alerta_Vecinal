@@ -3,7 +3,6 @@ flask-cors==4.0.1
 sqlalchemy==2.0.35
 flask-sqlalchemy==3.1.1
 requests==2.32.3
-inference-sdk
 python-dotenv
 gunicorn
 psycopg2-binar
