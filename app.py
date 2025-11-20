@@ -118,8 +118,7 @@ def create_app():
         if ai_info.get("plate_text"):
             plate_text = ai_info["plate_text"]
 
-        # 👉 AQUÍ copiamos el comportamiento viejo:
-        # Descripción del usuario + salto de línea + "Análisis IA: ..."
+        # descripción usuario + "Análisis IA: ..."
         if analysis_text:
             if description:
                 description_for_db = f"{description}\n{analysis_text}"
@@ -145,11 +144,9 @@ def create_app():
         db.session.add(report)
         db.session.commit()
 
-        # armar dict de respuesta coherente con lo que espera el front
         d = report.to_dict()
         d["weapon_detected"] = bool(report.has_weapon)
 
-        # extra: si logramos separar la parte de IA, la mandamos como ai_raw_summary
         if analysis_text:
             d["ai_raw_summary"] = analysis_text
 
@@ -175,10 +172,8 @@ def create_app():
         reports = []
         for r in q.limit(limit).all():
             d = r.to_dict()
-
             d["weapon_detected"] = bool(getattr(r, "has_weapon", False))
 
-            # intentar derivar ai_raw_summary desde description si contiene "Análisis IA:"
             desc = d.get("description") or ""
             if "Análisis IA:" in desc:
                 idx = desc.find("Análisis IA:")
@@ -214,9 +209,7 @@ def create_app():
         ]
         return jsonify({"ok": True, "data": points})
 
-   
-
-       # -------- Reportes cercanos --------
+    # -------- Reportes cercanos --------
 
     @app.route("/api/reports/nearby", methods=["GET"])
     def nearby_reports():
@@ -245,9 +238,7 @@ def create_app():
                 out.append(rd)
 
         out.sort(key=lambda x: x["distance_km"])
-        # 👇 ahora devolvemos también items y reports para que el front lo entienda
         return jsonify({"ok": True, "data": out, "items": out, "reports": out})
-
 
     # -------- Panel de autoridades: listar --------
 
@@ -271,7 +262,6 @@ def create_app():
         reports = []
         for r in q.all():
             d = r.to_dict()
-
             d["weapon_detected"] = bool(getattr(r, "has_weapon", False))
 
             desc = d.get("description") or ""
@@ -349,11 +339,60 @@ def create_app():
 
         return jsonify({"ok": True, "report": report.to_dict()})
 
+    # -------- Ruta de escape: track de movimiento --------
+
+    @app.route("/api/reports/<int:report_id>/track", methods=["POST"])
+    def add_track_point(report_id):
+        """
+        Guarda un punto de la ruta de escape asociado a un reporte.
+        Espera JSON:
+          - latitude (float)
+          - longitude (float)
+        """
+        data = request.get_json(silent=True) or {}
+        try:
+            lat = float(data.get("latitude"))
+            lng = float(data.get("longitude"))
+        except (TypeError, ValueError):
+            return jsonify({"ok": False, "error": "Latitud/Longitud inválidas"}), 400
+
+        report = Report.query.get(report_id)
+        if not report:
+            return jsonify({"ok": False, "error": "Reporte no encontrado"}), 404
+
+        tp = TrackPoint(report_id=report_id, latitude=lat, longitude=lng)
+        db.session.add(tp)
+        db.session.commit()
+
+        return jsonify({"ok": True, "item": tp.to_dict()}), 201
+
+    @app.route("/api/reports/<int:report_id>/track", methods=["GET"])
+    def list_track_points(report_id):
+        """
+        Devuelve todos los puntos de la ruta de escape de un reporte,
+        ordenados cronológicamente.
+        """
+        report = Report.query.get(report_id)
+        if not report:
+            return jsonify({"ok": False, "error": "Reporte no encontrado"}), 404
+
+        points = (
+            TrackPoint.query
+            .filter_by(report_id=report_id)
+            .order_by(TrackPoint.created_at.asc())
+            .all()
+        )
+        return jsonify(
+            {
+                "ok": True,
+                "items": [p.to_dict() for p in points],
+            }
+        )
+
     # -------- Servir imágenes --------
 
     @app.route("/api/uploads/<path:filename>", methods=["GET"])
     def get_upload(filename):
-        # carpeta física donde se guardan
         return send_from_directory(app.config["UPLOAD_FOLDER"], filename)
 
     return app
@@ -363,3 +402,4 @@ app = create_app()
 
 if __name__ == "__main__":
     app.run(debug=True, host="0.0.0.0", port=5000)
+
