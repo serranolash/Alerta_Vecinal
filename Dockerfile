@@ -1,20 +1,20 @@
-# Usamos Python 3.11 estable
+# Usamos una imagen oficial de Python 3.11
 FROM python:3.11-slim
 
-ENV PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONUNBUFFERED=1
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV PYTHONUNBUFFERED=1
 
+# Carpeta de trabajo dentro del contenedor
 WORKDIR /app
 
-# Dependencias
+# Instalamos dependencias
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Copiamos el resto del código
 COPY . .
 
-# Variables por defecto (puedes ajustar)
-ENV FLASK_ENV=production
+# Railway expone PORT, lo usamos en gunicorn
+ENV PORT=8000
 
-# Comando de arranque: gunicorn apuntando a app:app (tu create_app ya crea app)
-CMD ["gunicorn", "--bind", "0.0.0.0:8000", "app:app"]
+CMD ["sh", "-c", "gunicorn --bind 0.0.0.0:${PORT:-8000} app:app"]
