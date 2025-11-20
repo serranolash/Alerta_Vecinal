@@ -214,7 +214,9 @@ def create_app():
         ]
         return jsonify({"ok": True, "data": points})
 
-    # -------- Reportes cercanos --------
+   
+
+       # -------- Reportes cercanos --------
 
     @app.route("/api/reports/nearby", methods=["GET"])
     def nearby_reports():
@@ -243,7 +245,9 @@ def create_app():
                 out.append(rd)
 
         out.sort(key=lambda x: x["distance_km"])
-        return jsonify({"ok": True, "data": out})
+        # 👇 ahora devolvemos también items y reports para que el front lo entienda
+        return jsonify({"ok": True, "data": out, "items": out, "reports": out})
+
 
     # -------- Panel de autoridades: listar --------
 
