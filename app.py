@@ -1,13 +1,14 @@
 # backend/app.py
 import os
 from math import radians, cos, sin, sqrt, atan2
+from datetime import datetime, timedelta
 
 from flask import Flask, jsonify, request, send_from_directory
 from flask_cors import CORS
 
 from config import Config
 from database import db
-from models import Report, TrackPoint, PanicEvent
+from models import Report, TrackPoint, PanicEvent, HseqReport
 
 
 def create_app():
@@ -29,7 +30,12 @@ def create_app():
         R = 6371.0
         dlat = radians(lat2 - lat1)
         dlon = radians(lon2 - lon1)
-        a = sin(dlat / 2) ** 2 + cos(radians(lat1)) * cos(radians(lat2)) * sin(dlon / 2) ** 2
+        a = (
+            sin(dlat / 2) ** 2
+            + cos(radians(lat1))
+            * cos(radians(lat2))
+            * sin(dlon / 2) ** 2
+        )
         c = 2 * atan2(sqrt(a), sqrt(1 - a))
         return R * c
 
@@ -91,6 +97,7 @@ def create_app():
             # IA con bytes
             try:
                 from ai_vision import analyze_image
+
                 ai_info = analyze_image(image_bytes)
             except Exception as e:
                 print("[AI] Error en analyze_image:", e)
@@ -114,11 +121,11 @@ def create_app():
         # texto de análisis IA (para pegarlo a la descripción y para el panel)
         analysis_text = ai_info.get("ai_raw_summary") or ""
 
-        # si la IA (u otro módulo) devolvió patente, la usamos
+        # si la IA devolvió patente, la usamos
         if ai_info.get("plate_text"):
             plate_text = ai_info["plate_text"]
 
-        # descripción usuario + "Análisis IA: ..."
+        # Descripción del usuario + salto de línea + "Análisis IA: ..."
         if analysis_text:
             if description:
                 description_for_db = f"{description}\n{analysis_text}"
@@ -146,7 +153,6 @@ def create_app():
 
         d = report.to_dict()
         d["weapon_detected"] = bool(report.has_weapon)
-
         if analysis_text:
             d["ai_raw_summary"] = analysis_text
 
@@ -156,12 +162,6 @@ def create_app():
 
     @app.route("/api/reports", methods=["GET"])
     def list_reports():
-        """
-        Listado general de reportes (vista APP).
-        Query params:
-          - status (opcional)
-          - limit (opcional, default 50)
-        """
         status = request.args.get("status")
         limit = request.args.get("limit", type=int) or 50
 
@@ -182,14 +182,7 @@ def create_app():
 
             reports.append(d)
 
-        return jsonify(
-            {
-                "ok": True,
-                "data": reports,
-                "items": reports,
-                "reports": reports,
-            }
-        )
+        return jsonify({"ok": True, "data": reports, "items": reports, "reports": reports})
 
     # -------- Heatmap general --------
 
@@ -244,15 +237,9 @@ def create_app():
 
     @app.route("/api/admin/reports", methods=["GET", "OPTIONS"])
     def admin_list_reports():
-        # Preflight CORS
         if request.method == "OPTIONS":
             return ("", 200)
 
-        """
-        Listado para el panel de autoridades.
-        Query params:
-          - status (opcional)
-        """
         status = request.args.get("status")
 
         q = Report.query.order_by(Report.created_at.desc())
@@ -272,14 +259,7 @@ def create_app():
 
             reports.append(d)
 
-        return jsonify(
-            {
-                "ok": True,
-                "data": reports,
-                "items": reports,
-                "reports": reports,
-            }
-        )
+        return jsonify({"ok": True, "data": reports, "items": reports, "reports": reports})
 
     # -------- Panel de autoridades: cambiar estado --------
 
@@ -295,6 +275,40 @@ def create_app():
         report.status = status
         db.session.commit()
         return jsonify({"ok": True, "report": report.to_dict()})
+
+    # -------- Tracking de ruta de escape --------
+
+    @app.route("/api/reports/<int:report_id>/track", methods=["POST"])
+    def add_track_point(report_id):
+        data = request.get_json(silent=True) or {}
+        try:
+            lat = float(data.get("latitude"))
+            lng = float(data.get("longitude"))
+        except (TypeError, ValueError):
+            return jsonify({"ok": False, "error": "Latitud/Longitud inválidas"}), 400
+
+        report = Report.query.get(report_id)
+        if not report:
+            return jsonify({"ok": False, "error": "Reporte no encontrado"}), 404
+
+        tp = TrackPoint(report_id=report_id, latitude=lat, longitude=lng)
+        db.session.add(tp)
+        db.session.commit()
+
+        return jsonify({"ok": True, "item": tp.to_dict()}), 201
+
+    @app.route("/api/reports/<int:report_id>/track", methods=["GET"])
+    def list_track_points(report_id):
+        report = Report.query.get(report_id)
+        if not report:
+            return jsonify({"ok": False, "error": "Reporte no encontrado"}), 404
+
+        points = (
+            TrackPoint.query.filter_by(report_id=report_id)
+            .order_by(TrackPoint.created_at.asc())
+            .all()
+        )
+        return jsonify({"ok": True, "items": [p.to_dict() for p in points]})
 
     # -------- Botón de pánico --------
 
@@ -339,55 +353,111 @@ def create_app():
 
         return jsonify({"ok": True, "report": report.to_dict()})
 
-    # -------- Ruta de escape: track de movimiento --------
+    # -------- Módulo HSEQ: crear reporte --------
 
-    @app.route("/api/reports/<int:report_id>/track", methods=["POST"])
-    def add_track_point(report_id):
-        """
-        Guarda un punto de la ruta de escape asociado a un reporte.
-        Espera JSON:
-          - latitude (float)
-          - longitude (float)
-        """
-        data = request.get_json(silent=True) or {}
+    @app.route("/api/hseq/reports", methods=["POST"])
+    def create_hseq_report():
+        data = request.form
+        type_ = (data.get("type") or "otro").strip()
+        area = (data.get("area") or "").strip()
+        shift = (data.get("shift") or "").strip() or "dia"
+        description = (data.get("description") or "").strip()
+
+        lat = lng = None
         try:
-            lat = float(data.get("latitude"))
-            lng = float(data.get("longitude"))
+            if data.get("latitude") and data.get("longitude"):
+                lat = float(data.get("latitude"))
+                lng = float(data.get("longitude"))
         except (TypeError, ValueError):
-            return jsonify({"ok": False, "error": "Latitud/Longitud inválidas"}), 400
+            # coordenadas opcionales
+            pass
 
-        report = Report.query.get(report_id)
-        if not report:
-            return jsonify({"ok": False, "error": "Reporte no encontrado"}), 404
+        image = request.files.get("image")
+        image_path = None
+        if image and image.filename:
+            filename = image.filename or "hseq_evidencia.jpg"
+            safe_name = "hseq_" + filename.replace(" ", "_")
+            upload_folder = app.config["UPLOAD_FOLDER"]
+            os.makedirs(upload_folder, exist_ok=True)
+            full_path = os.path.join(upload_folder, safe_name)
+            image.save(full_path)
+            image_path = f"/api/uploads/{safe_name}"
 
-        tp = TrackPoint(report_id=report_id, latitude=lat, longitude=lng)
-        db.session.add(tp)
+        # Heurística simple de riesgo según tipo
+        if type_ == "accidente":
+            risk_level = "alto"
+        elif type_ in ("casi_accidente", "derrame"):
+            risk_level = "medio"
+        else:
+            risk_level = "bajo"
+
+        h = HseqReport(
+            type=type_,
+            area=area,
+            shift=shift,
+            description=description,
+            latitude=lat,
+            longitude=lng,
+            image_path=image_path,
+            risk_level=risk_level,
+            status="abierto",
+        )
+        db.session.add(h)
         db.session.commit()
 
-        return jsonify({"ok": True, "item": tp.to_dict()}), 201
+        return jsonify({"ok": True, "item": h.to_dict()}), 201
 
-    @app.route("/api/reports/<int:report_id>/track", methods=["GET"])
-    def list_track_points(report_id):
-        """
-        Devuelve todos los puntos de la ruta de escape de un reporte,
-        ordenados cronológicamente.
-        """
-        report = Report.query.get(report_id)
-        if not report:
-            return jsonify({"ok": False, "error": "Reporte no encontrado"}), 404
+    # -------- Módulo HSEQ: listar reportes --------
 
-        points = (
-            TrackPoint.query
-            .filter_by(report_id=report_id)
-            .order_by(TrackPoint.created_at.asc())
-            .all()
-        )
-        return jsonify(
-            {
-                "ok": True,
-                "items": [p.to_dict() for p in points],
-            }
-        )
+    @app.route("/api/hseq/reports", methods=["GET"])
+    def list_hseq_reports():
+        reports = HseqReport.query.order_by(HseqReport.created_at.desc()).all()
+        items = [r.to_dict() for r in reports]
+        return jsonify({"ok": True, "items": items, "data": items})
+
+    # -------- Módulo HSEQ: resumen dashboard --------
+
+    @app.route("/api/hseq/summary", methods=["GET"])
+    def hseq_summary():
+        now = datetime.utcnow()
+        since = now - timedelta(days=30)
+
+        last_30 = HseqReport.query.filter(HseqReport.created_at >= since).all()
+        total_last_30 = len(last_30)
+        accidents_last_30 = sum(1 for r in last_30 if r.type == "accidente")
+        near_misses_last_30 = sum(1 for r in last_30 if r.type == "casi_accidente")
+
+        # Top áreas
+        area_counts = {}
+        for r in last_30:
+            if r.area:
+                area_counts[r.area] = area_counts.get(r.area, 0) + 1
+        top_areas = sorted(
+            [{"area": a, "count": c} for a, c in area_counts.items()],
+            key=lambda x: x["count"],
+            reverse=True,
+        )[:5]
+
+        open_actions = HseqReport.query.filter(
+            HseqReport.status.in_(["abierto", "en_progreso"])
+        ).count()
+        closed_actions = HseqReport.query.filter(
+            HseqReport.status == "cerrado"
+        ).count()
+        overdue_actions = HseqReport.query.filter(
+            HseqReport.status == "vencido"
+        ).count()
+
+        data = {
+            "total_last_30": total_last_30,
+            "accidents_last_30": accidents_last_30,
+            "near_misses_last_30": near_misses_last_30,
+            "top_areas": top_areas,
+            "open_actions": open_actions,
+            "closed_actions": closed_actions,
+            "overdue_actions": overdue_actions,
+        }
+        return jsonify({"ok": True, "data": data})
 
     # -------- Servir imágenes --------
 
@@ -402,4 +472,3 @@ app = create_app()
 
 if __name__ == "__main__":
     app.run(debug=True, host="0.0.0.0", port=5000)
-

@@ -76,4 +76,43 @@ class PanicEvent(db.Model):
     under_duress = db.Column(db.Boolean, default=False)
     created_at = db.Column(db.DateTime, nullable=False)
 
-    report = db.relationship("Report", backref="panic_event", uselist=False)    
+    report = db.relationship("Report", backref="panic_event", uselist=False)
+
+
+
+class HseqReport(db.Model):
+    __tablename__ = "hseq_reports"
+
+    id = db.Column(db.Integer, primary_key=True)
+    type = db.Column(db.String(50), nullable=False)          # accidente, casi_accidente, etc.
+    area = db.Column(db.String(120))                         # Planta / unidad
+    shift = db.Column(db.String(20))                         # dia / tarde / noche
+    description = db.Column(db.Text)
+    latitude = db.Column(db.Float)
+    longitude = db.Column(db.Float)
+    image_path = db.Column(db.String(255))
+    risk_level = db.Column(db.String(20), default="medio")   # alto / medio / bajo
+    status = db.Column(db.String(20), default="abierto")     # abierto / en_progreso / cerrado / vencido
+
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at = db.Column(
+        db.DateTime,
+        default=datetime.utcnow,
+        onupdate=datetime.utcnow,
+    )
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "type": self.type,
+            "area": self.area,
+            "shift": self.shift,
+            "description": self.description,
+            "latitude": self.latitude,
+            "longitude": self.longitude,
+            "image_path": self.image_path,
+            "risk_level": self.risk_level,
+            "status": self.status,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+            "updated_at": self.updated_at.isoformat() if self.updated_at else None,
+        }        
